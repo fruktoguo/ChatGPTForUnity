@@ -9,7 +9,7 @@ namespace OpenAi
 {
     public class ChatGpt
     {
-        public const string ApiKey = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";
+        public const string ApiKey = "sk-xxxxx";
 
         static async Task GetAwaiter(AsyncOperation asyncOperation)
         {
@@ -18,7 +18,7 @@ namespace OpenAi
             await task.Task;
         }
 
-        public static async Task<string> GetResponse(string body, List<(string, string)> headers = null)
+        static async Task<string> GetResponse(string body, List<(string, string)> headers = null)
         {
             var url = "https://api.openai.com/v1/chat/completions";
 
@@ -72,6 +72,56 @@ namespace OpenAi
             return result;
         }
 
+        static string OperateMessage(string str)
+        {
+            string split = "data:";
+            var list = str.Split(split);
+            string result = "";
+            foreach (var s in list)
+            {
+                try
+                {
+                    if (s.Contains("[DONE]")) continue;
+                    var line = JsonUtility.FromJson<ChatCompletionChunk>(s);
+                    if (line == null) continue;
+                    result += line.choices.Count > 0 ? line.choices[0].delta.content : "";
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError(e);
+                }
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        ///  这个是Stream时返回的数据
+        /// </summary>
+        [Serializable]
+        public class ChatCompletionChunk
+        {
+            public string id;
+            public string @object;
+            public long created;
+            public string model;
+            public List<Choice> choices;
+
+            [Serializable]
+            public class Choice
+            {
+                public Delta delta;
+                public int index;
+                public object finish_reason;
+            }
+
+            [Serializable]
+            public class Delta
+            {
+                public string content;
+            }
+        }
+
         public static async Task<string> ChatStream(Chat chat, Action<string> onResultChange,
             int messageDelay = 100)
         {
@@ -107,6 +157,7 @@ namespace OpenAi
             {
                 await Task.Delay(messageDelay);
                 result = OperateMessage(webRequest.downloadHandler.text);
+                result = RemoveStartSpace(result);
                 onResultChange?.Invoke(result);
                 if (safeCount-- < 0)
                 {
@@ -133,53 +184,6 @@ namespace OpenAi
             return await ChatStream(chat, onResultChange, messageDelay);
         }
 
-        static string OperateMessage(string str)
-        {
-            string split = "data:";
-            var list = str.Split(split);
-            string result = "";
-            foreach (var s in list)
-            {
-                try
-                {
-                    if (s.Contains("[DONE]")) continue;
-                    var line = JsonUtility.FromJson<ChatCompletionChunk>(s);
-                    if (line == null) continue;
-                    result += line.choices.Count > 0 ? line.choices[0].delta.content : "";
-                }
-                catch (Exception e)
-                {
-                    Debug.LogError(e);
-                }
-            }
-
-            return result;
-        }
-
-        [Serializable]
-        public class ChatCompletionChunk
-        {
-            public string id;
-            public string @object;
-            public long created;
-            public string model;
-            public List<Choice> choices;
-
-            [Serializable]
-            public class Choice
-            {
-                public Delta delta;
-                public int index;
-                public object finish_reason;
-            }
-
-            [Serializable]
-            public class Delta
-            {
-                public string content;
-            }
-        }
-
         public static async Task<string> SingleAsk(string line, string initSetting = "")
         {
             var chat = new Chat();
@@ -191,16 +195,34 @@ namespace OpenAi
 
             var body = JsonUtility.ToJson(chat);
             var response = JsonUtility.FromJson<ChatCompletion>(await GetResponse(body));
-            return response.choices.Count > 0 ? response.choices[0].message.content : "";
+            var result = response.choices.Count > 0 ? response.choices[0].message.content : "";
+            result = RemoveStartSpace(result);
+            return result;
         }
 
-        public static async Task<ChatCompletion> SubmitChat(Chat chat)
+        public static async Task<ChatCompletion> Chat(Chat chat)
         {
             chat.stream = false;
             var body = JsonUtility.ToJson(chat);
             var response = JsonUtility.FromJson<ChatCompletion>(await GetResponse(body));
+            var result = response.choices.Count > 0 ? response.choices[0].message.content : "";
+            result = RemoveStartSpace(result);
+            response.choices[0].message.content = result;
             chat.messages.Add(response.choices[0].message);
             return response;
+        }
+
+        //移除字符串开头的空格和换行
+        public static string RemoveStartSpace(string str)
+        {
+            int i = 0;
+            for (; i < str.Length; i++)
+            {
+                if (str[i] != ' ' && str[i] != '\n')
+                    break;
+            }
+
+            return str.Substring(i);
         }
     }
 
@@ -246,6 +268,8 @@ namespace OpenAi
         public List<Message> messages;
         public string Now => messages.Count > 0 ? messages[^1].content : "null";
         public bool stream = false;
+
+        public int max_tokens = 1024;
 
         public void AddSystemMessage(string message)
         {
